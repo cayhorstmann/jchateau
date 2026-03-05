@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Markdown → HTML (Quarkus + Chicory + pandoc.wasm)</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 1.5rem;
+      background: #f5f5f5;
+      color: #222;
+    }
+
+    h1 {
+      margin-bottom: 0.25rem;
+      font-size: 1.5rem;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    @media (max-width: 700px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    label {
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+
+    textarea {
+      width: 100%;
+      height: 400px;
+      padding: 0.75rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.875rem;
+      resize: vertical;
+      background: #fff;
+    }
+
+    textarea:focus {
+      outline: 2px solid #4f46e5;
+      border-color: transparent;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    button {
+      padding: 0.5rem 1.25rem;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button:hover { background: #4338ca; }
+    button:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    #status {
+      font-size: 0.8rem;
+      color: #666;
+    }
+
+    iframe {
+      width: 100%;
+      height: 400px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .error {
+      color: #b91c1c;
+      font-size: 0.875rem;
+      padding: 0.5rem;
+      background: #fee2e2;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Markdown → HTML</h1>
+<p class="subtitle">
+  Powered by
+  <a href="https://quarkus.io" target="_blank">Quarkus</a>,
+  <a href="https://github.com/quarkiverse/quarkus-chicory" target="_blank">quarkus-chicory</a>, and
+  <a href="https://github.com/pandoc/pandoc-wasm" target="_blank">pandoc.wasm</a>
+  running server-side on the JVM via
+  <a href="https://chicory.dev" target="_blank">Chicory</a>.
+</p>
+
+<div class="toolbar">
+  <button id="convertBtn" onclick="convert()">Convert</button>
+  <span id="status"></span>
+</div>
+
+<div class="layout">
+  <div class="panel">
+    <label for="markdown">Markdown input</label>
+    <textarea id="markdown" spellcheck="false" placeholder="Paste your Markdown here…"># Hello, Pandoc + Chicory!
+
+This demo converts **Markdown** to HTML entirely on the server using
+[pandoc.wasm](https://github.com/pandoc/pandoc-wasm) running inside the
+JVM via the [Chicory](https://chicory.dev) WebAssembly runtime.
+
+## Features
+
+- No JavaScript required on the server
+- Pure JVM execution — no native binaries, no JNI
+- Powered by Quarkus and the `quarkus-chicory` extension
+
+## Code example
+
+```java
+instance.export("convert").apply(optsPtr, optsLen);
+```
+
+> The entire Pandoc binary (≈ 58 MB) is loaded once and shared across requests.
+</textarea>
+  </div>
+
+  <div class="panel">
+    <label for="preview">HTML preview</label>
+    <iframe id="preview" title="Rendered HTML preview" sandbox="allow-same-origin"></iframe>
+  </div>
+</div>
+
+<script>
+  async function convert() {
+    const markdown = document.getElementById('markdown').value;
+    const btn = document.getElementById('convertBtn');
+    const status = document.getElementById('status');
+    const preview = document.getElementById('preview');
+
+    btn.disabled = true;
+    status.textContent = 'Converting…';
+    status.className = '';
+
+    try {
+      const response = await fetch('/api/convert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: markdown
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        status.textContent = 'Error: ' + response.status;
+        status.className = 'error';
+        preview.srcdoc = '<p style="color:red">' + errText + '</p>';
+        return;
+      }
+
+      const html = await response.text();
+      preview.srcdoc = html;
+      status.textContent = 'Done ✓';
+    } catch (err) {
+      status.textContent = 'Network error: ' + err.message;
+      status.className = 'error';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Convert on Ctrl+Enter / Cmd+Enter
+  document.getElementById('markdown').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      convert();
+    }
+  });
+</script>
+
+</body>
+</html>
