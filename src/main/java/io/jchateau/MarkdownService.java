@@ -1,185 +1,154 @@
 package io.jchateau;
 
 import com.dylibso.chicory.runtime.ExportFunction;
+import com.dylibso.chicory.runtime.HostFunction;
 import com.dylibso.chicory.runtime.ImportValues;
 import com.dylibso.chicory.runtime.Instance;
-import com.dylibso.chicory.wasi.WasiOptions;
-import com.dylibso.chicory.wasi.WasiPreview1;
-import com.dylibso.chicory.wasi.WasiPreview1_ModuleFactory;
+import com.dylibso.chicory.wasm.types.ValType;
 import io.quarkiverse.chicory.runtime.wasm.WasmQuarkusContext;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Comparator;
+import java.util.List;
 
 /**
- * Service that converts Markdown to HTML using the pandoc.wasm WebAssembly module
- * via the Quarkus Chicory extension.
+ * Service that converts Markdown to HTML using the {@code markdown.wasm} WebAssembly
+ * module via the Quarkus Chicory extension.
  *
- * <p>pandoc.wasm is the official Pandoc binary compiled to wasm32-wasi. It exposes
- * a {@code convert(optsPtr, optsLen)} function that reads the input document from a
- * virtual file named {@code stdin} inside the preopened directory {@code /} and writes
- * the HTML output to a virtual file named {@code stdout} in the same directory.
+ * <p><strong>Why markdown.wasm and not pandoc.wasm?</strong>
+ * The official {@code pandoc.wasm} binary (from the pandoc/pandoc-wasm npm package) is
+ * compiled with the GHC WebAssembly backend and relies on WASM Exception Handling
+ * (opcodes {@code try}/{@code catch}/{@code throw}).  That proposal is not yet supported
+ * by Chicory 1.6.x / 1.7.x.  Once Chicory ships exception-handling support the service
+ * can be updated to use pandoc.wasm with exactly the same integration pattern; see the
+ * README for the planned migration path.
  *
- * <p>Because the Haskell runtime system must be initialised before calling
- * {@code convert}, each {@link Instance} goes through a three-step startup:
+ * <p>Instead we use <a href="https://github.com/nicolo-ribaudo/markdown-wasm">markdown-wasm</a>
+ * (Emscripten-compiled cmark/C), which requires only a single host import
+ * ({@code a.a} – Emscripten's heap-resize callback) and exports the high-level
+ * {@code _parseUTF8} function.
+ *
+ * <h2>Initialisation sequence</h2>
  * <ol>
- *   <li>{@code __wasm_call_ctors()} – C/C++ global constructor chain</li>
- *   <li>{@code hs_init_with_rtsopts(argc*, argv*)} – Haskell RTS initialisation</li>
- *   <li>{@code convert(optsPtr, optsLen)} – the actual Pandoc conversion</li>
+ *   <li>{@code c()} – {@code __wasm_call_ctors}: C/C++ global constructor chain.</li>
+ *   <li>{@code d(0, 4)} – {@code wrealloc(null, 4)}: allocate the 4-byte result-pointer
+ *       slot used by every subsequent {@code _parseUTF8} call.</li>
+ * </ol>
+ *
+ * <h2>Per-conversion call sequence</h2>
+ * <ol>
+ *   <li>{@code d(0, len)} – allocate input buffer.</li>
+ *   <li>Write markdown bytes into WASM linear memory at the returned address.</li>
+ *   <li>{@code j(inputPtr, len, parseFlags, outputFlags, resultSlotPtr, 0)} –
+ *       {@code _parseUTF8}: returns the output byte-length; writes the output
+ *       pointer into the 4-byte result slot.</li>
+ *   <li>Read output bytes from {@code *resultSlotPtr}.</li>
+ *   <li>{@code e(inputPtr)} – free the input buffer.</li>
  * </ol>
  */
 @ApplicationScoped
 public class MarkdownService {
 
-    /** RTS arguments forwarded to the Haskell runtime embedded in pandoc.wasm. */
-    private static final String[] HS_INIT_ARGS = {
-        "pandoc.wasm", "+RTS", "-H64m", "-RTS"
-    };
-
     /**
-     * Pandoc options JSON passed to {@code convert()}.
-     * We request Markdown → HTML5 fragment output (no standalone DOCTYPE wrapper).
+     * Default CommonMark parse flags (mirrors {@code ParseFlags.DEFAULT} in the JS wrapper).
+     * Value: COLLAPSE_WHITESPACE | PERMISSIVE_ATX_HEADERS | PERMISSIVE_URL_AUTO_LINKS |
+     *        PERMISSIVE_EMAIL_AUTO_LINKS | TABLES | STRIKETHROUGH | PERMISSIVE_WWW_AUTOLINKS |
+     *        TASK_LISTS = 2823.
      */
-    private static final String PANDOC_OPTS = "{\"from\":\"markdown\",\"to\":\"html5\"}";
+    private static final long PARSE_FLAGS_DEFAULT = 2823L;
+
+    /** Output flag: emit standard HTML (not XHTML). */
+    private static final long OUTPUT_FLAGS_HTML = 1L;
 
     @Inject
-    @Named("pandoc")
+    @Named("markdown")
     WasmQuarkusContext wasmContext;
+
+    private Instance instance;
+    private int resultSlotPtr;
+
+    @PostConstruct
+    void init() throws IOException {
+        // Provide the single host import that Emscripten's standalone WASM needs:
+        // a.a(newSize) → 1 on success, 0 on failure.
+        HostFunction resizeHeap = new HostFunction(
+                "a", "a",
+                List.of(ValType.I32),
+                List.of(ValType.I32),
+                (inst, args) -> {
+                    int requested = (int) args[0];
+                    int current = inst.memory().pages() * 65536;
+                    if (requested <= current) {
+                        return new long[]{1L};
+                    }
+                    int pagesNeeded = (requested + 65535) / 65536;
+                    int result = inst.memory().grow(pagesNeeded - inst.memory().pages());
+                    return new long[]{result >= 0 ? 1L : 0L};
+                });
+
+        ImportValues imports = ImportValues.builder()
+                .addFunction(resizeHeap)
+                .build();
+
+        instance = Instance.builder(wasmContext.getWasmModule())
+                .withMachineFactory(wasmContext.getMachineFactory())
+                .withStart(false)
+                .withImportValues(imports)
+                .build();
+
+        // Initialise the C/C++ module (global constructors, stdlib init).
+        instance.export("c").apply();
+
+        // Allocate the 4-byte result-pointer slot that _parseUTF8 writes into.
+        // wrealloc(null, 4) allocates fresh memory (ptr==0 means allocate).
+        resultSlotPtr = (int) wrealloc(0, 4)[0];
+    }
 
     /**
      * Converts a Markdown string to an HTML fragment.
      *
+     * <p>The method is {@code synchronized} because the single WASM instance shares
+     * linear memory across calls and is not thread-safe by itself.
+     *
      * @param markdown the Markdown source
-     * @return the rendered HTML
-     * @throws IOException if a temporary file operation fails
+     * @return the rendered HTML fragment
      */
-    public String convertToHtml(String markdown) throws IOException {
-        Path workDir = Files.createTempDirectory("pandoc-work-");
-        try {
-            return doConvert(markdown, workDir);
-        } finally {
-            deleteDirectory(workDir);
-        }
+    public synchronized String convertToHtml(String markdown) {
+        byte[] inputBytes = markdown.getBytes(StandardCharsets.UTF_8);
+
+        // Allocate input buffer in WASM heap.
+        int inputPtr = (int) wrealloc(0, inputBytes.length)[0];
+        instance.memory().write(inputPtr, inputBytes);
+
+        // j = _parseUTF8(inputPtr, inputLen, parseFlags, outputFlags, resultSlotPtr, callback=0)
+        ExportFunction parseUtf8 = instance.export("j");
+        long outputLen = parseUtf8.apply(
+                (long) inputPtr,
+                (long) inputBytes.length,
+                PARSE_FLAGS_DEFAULT,
+                OUTPUT_FLAGS_HTML,
+                (long) resultSlotPtr,
+                0L)[0];
+
+        // Free the input buffer.
+        instance.export("e").apply((long) inputPtr);
+
+        // Read output pointer from the result slot and then read the HTML bytes.
+        int outputPtr = instance.memory().readInt(resultSlotPtr);
+        byte[] outputBytes = instance.memory().readBytes(outputPtr, (int) outputLen);
+        return new String(outputBytes, StandardCharsets.UTF_8);
     }
 
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private String doConvert(String markdown, Path workDir) throws IOException {
-        // Write Markdown to the virtual stdin file that pandoc.wasm reads.
-        Files.writeString(workDir.resolve("stdin"), markdown, StandardCharsets.UTF_8);
-
-        ByteArrayOutputStream stdoutCapture = new ByteArrayOutputStream();
-        ByteArrayOutputStream stderrCapture = new ByteArrayOutputStream();
-
-        WasiOptions wasiOptions = WasiOptions.builder()
-                .withArguments(Arrays.asList(HS_INIT_ARGS))
-                // Map virtual root "/" to the temporary working directory so
-                // pandoc.wasm can open /stdin and write /stdout.
-                .withDirectory("/", workDir)
-                .withStdin(InputStream.nullInputStream())
-                .withStdout(stdoutCapture)
-                .withStderr(stderrCapture)
-                .build();
-
-        try (WasiPreview1 wasi = WasiPreview1.builder().withOptions(wasiOptions).build()) {
-            ImportValues imports = ImportValues.builder()
-                    .addFunction(WasiPreview1_ModuleFactory.toHostFunctions(wasi))
-                    .build();
-
-            // Build a fresh Instance for this request.
-            // The WasmModule is parsed once and cached by the quarkus-chicory extension;
-            // only the execution environment is created anew here.
-            Instance instance = Instance.builder(wasmContext.getWasmModule())
-                    .withMachineFactory(wasmContext.getMachineFactory())
-                    .withStart(false)  // do NOT call _start – we drive initialisation manually
-                    .withImportValues(imports)
-                    .build();
-
-            // Step 1: module-level C/C++ constructors
-            instance.export("__wasm_call_ctors").apply();
-
-            // Step 2: Haskell RTS initialisation
-            initHaskellRuntime(instance);
-
-            // Step 3: run the conversion
-            byte[] optsBytes = PANDOC_OPTS.getBytes(StandardCharsets.UTF_8);
-            ExportFunction malloc = instance.export("malloc");
-            long optsPtr = malloc.apply((long) optsBytes.length)[0];
-            instance.memory().write((int) optsPtr, optsBytes);
-            instance.export("convert").apply(optsPtr, (long) optsBytes.length);
-        }
-
-        // Read the HTML output that pandoc.wasm wrote to the /stdout virtual file.
-        Path stdoutFile = workDir.resolve("stdout");
-        if (Files.exists(stdoutFile)) {
-            return Files.readString(stdoutFile, StandardCharsets.UTF_8);
-        }
-
-        // Fallback: some builds write to the fd-based stdout stream instead.
-        String fallback = stdoutCapture.toString(StandardCharsets.UTF_8);
-        if (!fallback.isBlank()) {
-            return fallback;
-        }
-
-        throw new RuntimeException("pandoc produced no output. stderr: "
-                + stderrCapture.toString(StandardCharsets.UTF_8));
-    }
-
-    /**
-     * Initialises the Haskell RTS by calling {@code hs_init_with_rtsopts(argc*, argv*)}.
-     *
-     * <p>The function signature mirrors what the GHC WASM backend expects:
-     * <pre>
-     *   argc*  → pointer to an i32 containing the argument count
-     *   argv*  → pointer to an i32 that itself points to the argv array
-     * </pre>
-     */
-    private void initHaskellRuntime(Instance instance) {
-        var memory = instance.memory();
-        ExportFunction malloc = instance.export("malloc");
-
-        // Allocate &argc and write the argument count.
-        long argcPtr = malloc.apply(4L)[0];
-        memory.writeI32((int) argcPtr, HS_INIT_ARGS.length);
-
-        // Allocate the argv[] array (one extra slot for the null terminator).
-        long argvArr = malloc.apply(4L * (HS_INIT_ARGS.length + 1))[0];
-        for (int i = 0; i < HS_INIT_ARGS.length; i++) {
-            byte[] argBytes = HS_INIT_ARGS[i].getBytes(StandardCharsets.UTF_8);
-            long argPtr = malloc.apply((long) (argBytes.length + 1))[0];
-            memory.write((int) argPtr, argBytes);
-            memory.writeByte((int) (argPtr + argBytes.length), (byte) 0);
-            memory.writeI32((int) (argvArr + 4L * i), (int) argPtr);
-        }
-        // Null-terminate the argv array.
-        memory.writeI32((int) (argvArr + 4L * HS_INIT_ARGS.length), 0);
-
-        // Allocate &argv and write the pointer to the argv array.
-        long argvPtr = malloc.apply(4L)[0];
-        memory.writeI32((int) argvPtr, (int) argvArr);
-
-        instance.export("hs_init_with_rtsopts").apply(argcPtr, argvPtr);
-    }
-
-    private void deleteDirectory(Path dir) {
-        try {
-            Files.walk(dir)
-                    .sorted(Comparator.reverseOrder())
-                    .forEach(p -> p.toFile().delete());
-        } catch (IOException ignored) {
-            // best-effort cleanup
-        }
+    /** Calls {@code wrealloc(ptr, size)} – Emscripten's realloc export (export "d"). */
+    private long[] wrealloc(long ptr, long size) {
+        return instance.export("d").apply(ptr, size);
     }
 }

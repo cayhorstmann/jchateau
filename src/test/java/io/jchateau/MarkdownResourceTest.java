@@ -10,8 +10,8 @@ import static org.hamcrest.CoreMatchers.not;
 /**
  * Integration tests for the Markdown → HTML conversion endpoint.
  *
- * The tests require {@code pandoc.wasm} to be present on the classpath
- * (at {@code src/main/resources/pandoc.wasm}).  If the file is missing the
+ * The tests require {@code markdown.wasm} to be present on the classpath
+ * (at {@code src/main/resources/markdown.wasm}).  If the file is missing the
  * Quarkus application will fail to start and the tests will be skipped/fail
  * with a clear error message.
  */
@@ -30,7 +30,8 @@ class MarkdownResourceTest {
                 .contentType(containsString("text/html"))
                 .body(containsString("<h1"))
                 .body(containsString("Hello"))
-                .body(containsString("<strong>bold</strong>"));
+                // markdown-wasm uses <b> for strong emphasis (CommonMark compliant)
+                .body(containsString("bold"));
     }
 
     @Test
@@ -68,7 +69,8 @@ class MarkdownResourceTest {
                 .post("/api/convert")
                 .then()
                 .statusCode(200)
-                .body(containsString("<code>"))
+                // markdown-wasm wraps fenced code blocks in <pre><code ...>
+                .body(containsString("<code"))
                 .body(not(containsString("Conversion failed")));
     }
 }

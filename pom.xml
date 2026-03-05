@@ -42,13 +42,6 @@
             <version>${quarkus-chicory.version}</version>
         </dependency>
 
-        <!-- Chicory WASI support (wasm32-wasi module execution) -->
-        <dependency>
-            <groupId>com.dylibso.chicory</groupId>
-            <artifactId>wasi</artifactId>
-            <version>${chicory.version}</version>
-        </dependency>
-
         <!-- Chicory runtime (Instance, Memory, etc.) -->
         <dependency>
             <groupId>com.dylibso.chicory</groupId>

@@ -24,3 +24,6 @@ target/
 # Maven wrapper
 .mvn/timing.properties
 .mvn/wrapper/maven-wrapper.jar
+
+# Large WASM binaries (download separately – see README)
+src/main/resources/pandoc.wasm

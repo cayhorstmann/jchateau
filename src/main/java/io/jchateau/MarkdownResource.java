@@ -7,6 +7,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import java.util.logging.Logger;
 
 /**
  * REST resource that exposes the Markdown-to-HTML conversion endpoint.
@@ -18,6 +19,8 @@ import jakarta.ws.rs.core.Response;
  */
 @Path("/api")
 public class MarkdownResource {
+
+    private static final Logger LOG = Logger.getLogger(MarkdownResource.class.getName());
 
     @Inject
     MarkdownService markdownService;
@@ -38,9 +41,10 @@ public class MarkdownResource {
             String html = markdownService.convertToHtml(markdown);
             return Response.ok(html, MediaType.TEXT_HTML).build();
         } catch (Exception e) {
+            LOG.severe("Markdown conversion failed: " + e.getMessage());
             return Response
                     .serverError()
-                    .entity("<p>Conversion failed: " + e.getMessage() + "</p>")
+                    .entity("<p>Markdown conversion failed. Please check the server logs.</p>")
                     .type(MediaType.TEXT_HTML)
                     .build();
         }

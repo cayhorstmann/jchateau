@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Markdown → HTML (Quarkus + Chicory + pandoc.wasm)</title>
+  <title>Markdown → HTML (Quarkus + Chicory + markdown-wasm)</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
 
@@ -114,7 +114,7 @@
   Powered by
   <a href="https://quarkus.io" target="_blank">Quarkus</a>,
   <a href="https://github.com/quarkiverse/quarkus-chicory" target="_blank">quarkus-chicory</a>, and
-  <a href="https://github.com/pandoc/pandoc-wasm" target="_blank">pandoc.wasm</a>
+  <a href="https://github.com/nicolo-ribaudo/markdown-wasm" target="_blank">markdown-wasm</a>
   running server-side on the JVM via
   <a href="https://chicory.dev" target="_blank">Chicory</a>.
 </p>
@@ -127,10 +127,10 @@
 <div class="layout">
   <div class="panel">
     <label for="markdown">Markdown input</label>
-    <textarea id="markdown" spellcheck="false" placeholder="Paste your Markdown here…"># Hello, Pandoc + Chicory!
+    <textarea id="markdown" spellcheck="false" placeholder="Paste your Markdown here…"># Hello, Chicory + WebAssembly!
 
 This demo converts **Markdown** to HTML entirely on the server using
-[pandoc.wasm](https://github.com/pandoc/pandoc-wasm) running inside the
+[markdown-wasm](https://github.com/nicolo-ribaudo/markdown-wasm) running inside the
 JVM via the [Chicory](https://chicory.dev) WebAssembly runtime.
 
 ## Features
@@ -142,10 +142,10 @@ JVM via the [Chicory](https://chicory.dev) WebAssembly runtime.
 ## Code example
 
 ```java
-instance.export("convert").apply(optsPtr, optsLen);
+instance.export("j").apply(inputPtr, inputLen, parseFlags, outputFlags, resultSlotPtr, 0L);
 ```
 
-> The entire Pandoc binary (≈ 58 MB) is loaded once and shared across requests.
+> The markdown-wasm module (≈ 56 KB) is loaded once and shared across requests.
 </textarea>
   </div>
 
