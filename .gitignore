@@ -1,0 +1,29 @@
+# jchateau
+
+# Build output
+target/
+
+# Quarkus native image
+*.runner
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.iws
+.classpath
+.project
+.settings/
+
+# macOS
+.DS_Store
+
+# Compiled classes / generated sources
+*.class
+
+# Maven wrapper
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Large WASM binaries (download separately – see README)
+src/main/resources/pandoc.wasm
