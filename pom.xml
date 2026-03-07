@@ -12,8 +12,8 @@
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.version>3.30.6</quarkus.version>
-        <quarkus-chicory.version>0.0.1</quarkus-chicory.version>
-        <chicory.version>1.6.1</chicory.version>
+        <graalvm.version>24.2.2</graalvm.version>
+        <pandoc.wasm.version>1.0.1</pandoc.wasm.version>
     </properties>
 
     <dependencyManagement>
@@ -35,18 +35,19 @@
             <artifactId>quarkus-rest</artifactId>
         </dependency>
 
-        <!-- Quarkus Chicory extension for WebAssembly -->
+        <!-- GraalVM Polyglot API -->
         <dependency>
-            <groupId>io.quarkiverse.chicory</groupId>
-            <artifactId>quarkus-chicory</artifactId>
-            <version>${quarkus-chicory.version}</version>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>polyglot</artifactId>
+            <version>${graalvm.version}</version>
         </dependency>
 
-        <!-- Chicory runtime (Instance, Memory, etc.) -->
+        <!-- GraalWasm – WebAssembly engine (pulls in wasm-language + truffle-runtime) -->
         <dependency>
-            <groupId>com.dylibso.chicory</groupId>
-            <artifactId>runtime</artifactId>
-            <version>${chicory.version}</version>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>wasm-community</artifactId>
+            <version>${graalvm.version}</version>
+            <type>pom</type>
         </dependency>
 
         <!-- Testing -->
@@ -64,6 +65,28 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>download-pandoc-wasm</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>sh</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments>
+                                <argument>-c</argument>
+                                <argument>test -f src/main/resources/pandoc.wasm || (T=$(mktemp -d) &amp;&amp; curl -fsSL https://registry.npmjs.org/pandoc-wasm/-/pandoc-wasm-${pandoc.wasm.version}.tgz | tar -C "$T" -xz &amp;&amp; mv "$T/package/src/pandoc.wasm" src/main/resources/pandoc.wasm &amp;&amp; rm -rf "$T")</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>io.quarkus</groupId>
                 <artifactId>quarkus-maven-plugin</artifactId>
