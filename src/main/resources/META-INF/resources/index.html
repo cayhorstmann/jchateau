@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Markdown → HTML (Quarkus + Chicory + markdown-wasm)</title>
+  <title>Markdown → HTML (Quarkus + GraalVM + pandoc.wasm)</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
 
@@ -112,11 +112,10 @@
 <h1>Markdown → HTML</h1>
 <p class="subtitle">
   Powered by
-  <a href="https://quarkus.io" target="_blank">Quarkus</a>,
-  <a href="https://github.com/quarkiverse/quarkus-chicory" target="_blank">quarkus-chicory</a>, and
-  <a href="https://github.com/nicolo-ribaudo/markdown-wasm" target="_blank">markdown-wasm</a>
-  running server-side on the JVM via
-  <a href="https://chicory.dev" target="_blank">Chicory</a>.
+  <a href="https://quarkus.io" target="_blank">Quarkus</a> and
+  <a href="https://pandoc.org" target="_blank">pandoc.wasm</a>
+  (Pandoc 3.9) running server-side on the JVM via
+  <a href="https://www.graalvm.org/latest/reference-manual/wasm/" target="_blank">GraalVM WebAssembly</a>.
 </p>
 
 <div class="toolbar">
@@ -127,25 +126,25 @@
 <div class="layout">
   <div class="panel">
     <label for="markdown">Markdown input</label>
-    <textarea id="markdown" spellcheck="false" placeholder="Paste your Markdown here…"># Hello, Chicory + WebAssembly!
+    <textarea id="markdown" spellcheck="false" placeholder="Paste your Markdown here…"># Hello, pandoc + WebAssembly!
 
 This demo converts **Markdown** to HTML entirely on the server using
-[markdown-wasm](https://github.com/nicolo-ribaudo/markdown-wasm) running inside the
-JVM via the [Chicory](https://chicory.dev) WebAssembly runtime.
+[pandoc.wasm](https://github.com/pandoc/pandoc-wasm) (Pandoc 3.9) running inside the
+JVM via [GraalVM WebAssembly](https://www.graalvm.org/latest/reference-manual/wasm/).
 
 ## Features
 
 - No JavaScript required on the server
 - Pure JVM execution — no native binaries, no JNI
-- Powered by Quarkus and the `quarkus-chicory` extension
+- Powered by Quarkus and the GraalVM Polyglot API
 
 ## Code example
 
 ```java
-instance.export("j").apply(inputPtr, inputLen, parseFlags, outputFlags, resultSlotPtr, 0L);
+exports.getMember("convert").execute((long) optsPtr, (long) OPTS_JSON.length);
 ```
 
-> The markdown-wasm module (≈ 56 KB) is loaded once and shared across requests.
+> pandoc.wasm (~56 MB) is loaded once at startup and shared across requests.
 </textarea>
   </div>
 
