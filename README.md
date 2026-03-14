@@ -55,7 +55,8 @@ java -jar target/quarkus-app/quarkus-run.jar
 ### Current implementation — markdown-wasm
 
 The application uses
-[markdown-wasm](https://github.com/nicolo-ribaudo/markdown-wasm) v1.2.0
+[markdown-wasm](https://github.com/rsms/markdown-wasm) v1.2.0 (by Rasmus Andersson),
+available on npm as [`markdown-wasm`](https://www.npmjs.com/package/markdown-wasm)
 — an Emscripten-compiled build of the
 [cmark](https://github.com/commonmark/cmark) C library.  It is CommonMark
 compliant, supports GitHub Flavoured Markdown extensions (tables, task lists,

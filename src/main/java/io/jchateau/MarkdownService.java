@@ -27,7 +27,7 @@ import java.util.List;
  * can be updated to use pandoc.wasm with exactly the same integration pattern; see the
  * README for the planned migration path.
  *
- * <p>Instead we use <a href="https://github.com/nicolo-ribaudo/markdown-wasm">markdown-wasm</a>
+ * <p>Instead we use <a href="https://github.com/rsms/markdown-wasm">markdown-wasm</a>
  * (Emscripten-compiled cmark/C), which requires only a single host import
  * ({@code a.a} – Emscripten's heap-resize callback) and exports the high-level
  * {@code _parseUTF8} function.
