@@ -29,24 +29,14 @@ public class MarkdownResource {
      * Converts a Markdown document to HTML.
      *
      * @param markdown the raw Markdown text submitted by the browser
-     * @return an HTTP 200 response containing the rendered HTML;
-     *         HTTP 503 when pandoc.wasm is not yet available (e.g. GraalWasm < 25.1.0);
-     *         HTTP 500 on any other conversion failure
+     * @return an HTTP 200 response containing the rendered HTML, or HTTP 500
+     *         on conversion failure
      */
     @POST
     @Path("/convert")
     @Consumes(MediaType.TEXT_PLAIN)
     @Produces(MediaType.TEXT_HTML)
     public Response convert(String markdown) {
-        if (!markdownService.isAvailable()) {
-            LOG.warning("Conversion requested but pandoc.wasm is not available: "
-                    + markdownService.getUnavailableReason());
-            return Response.status(Response.Status.SERVICE_UNAVAILABLE)
-                    .entity("<p>pandoc.wasm is not available with the current GraalWasm version. "
-                            + "See server logs for details.</p>")
-                    .type(MediaType.TEXT_HTML)
-                    .build();
-        }
         try {
             String html = markdownService.convertToHtml(markdown);
             return Response.ok(html, MediaType.TEXT_HTML).build();

@@ -1,8 +1,9 @@
-# jchateau — Markdown-to-HTML with Quarkus + GraalVM WebAssembly
+# jchateau — Markdown-to-HTML with Quarkus + Chicory + WebAssembly
 
-A demo application that converts Markdown to HTML entirely on the server using the
-official [pandoc.wasm](https://github.com/pandoc/pandoc-wasm) binary running inside
-the JVM via [GraalVM's WebAssembly engine (GraalWasm)](https://www.graalvm.org/latest/reference-manual/wasm/).
+A demo application that converts Markdown to HTML entirely on the server using a
+WebAssembly module running inside the JVM via the
+[Chicory](https://chicory.dev) runtime and the
+[quarkus-chicory](https://github.com/quarkiverse/quarkus-chicory) Quarkus extension.
 
 ![Demo screenshot](https://github.com/user-attachments/assets/0ab7720f-8ab7-44ba-86b5-463e6d2a0b9d)
 
@@ -15,14 +16,12 @@ Browser (index.html)
 Quarkus REST endpoint (MarkdownResource)
   │
   ▼
-MarkdownService ──► GraalVM Polyglot Context (pandoc.wasm / GHC WASM)
-                          │  wasm.Builtins=wasi_snapshot_preview1
-                          │  wasm.WasiMapDirs=/::<tmpDir>
-                          │  1. __wasm_call_ctors()
-                          │  2. hs_init_with_rtsopts(argc, argv)
-                          │  3. write markdown → <tmpDir>/stdin
-                          │  4. convert(optsPtr, optsLen)
-                          │  5. read <tmpDir>/stdout → HTML
+MarkdownService  ──► Chicory Instance (markdown.wasm / Emscripten)
+                           │  host import: a.a(newSize) → heap-resize callback
+                           │  1. c()  – __wasm_call_ctors
+                           │  2. d(0, 4) – allocate result-pointer slot
+                           │  3. j(inputPtr, len, flags, …) – _parseUTF8
+                      writes output to WASM linear memory
   │
   ▼
 HTML fragment returned to browser and displayed in an <iframe>
@@ -35,13 +34,10 @@ HTML fragment returned to browser and displayed in an <iframe>
 git clone https://github.com/cayhorstmann/jchateau.git
 cd jchateau
 
-# 2. Download pandoc.wasm (runs automatically; requires curl + tar)
-mvn generate-resources
-
-# 3. Start in development mode (live reload)
+# 2. Start in development mode (live reload)
 mvn quarkus:dev
 
-# 4. Open http://localhost:8080 in your browser
+# 3. Open http://localhost:8080 in your browser
 ```
 
 Paste Markdown into the left pane, click **Convert** (or press **Ctrl+Enter**),
@@ -54,82 +50,86 @@ mvn package
 java -jar target/quarkus-app/quarkus-run.jar
 ```
 
-## WebAssembly module — pandoc.wasm
+## WebAssembly module — markdown.wasm vs pandoc.wasm
 
-The application uses the official **pandoc.wasm** binary (Pandoc 3.9, ~56 MB)
-distributed via the [`pandoc-wasm`](https://www.npmjs.com/package/pandoc-wasm)
-npm package.  It is compiled from the full
-[Pandoc](https://pandoc.org) Haskell source by the GHC WebAssembly backend and
-targets `wasm32-wasi`.
+### Current implementation — markdown-wasm
 
-The binary only requires `wasi_snapshot_preview1` host imports, which GraalWasm
-satisfies automatically via the `wasm.Builtins` option.
+The application uses
+[markdown-wasm](https://github.com/rsms/markdown-wasm) v1.2.0 (by Rasmus Andersson),
+available on npm as [`markdown-wasm`](https://www.npmjs.com/package/markdown-wasm)
+— an Emscripten-compiled build of the
+[cmark](https://github.com/commonmark/cmark) C library.  It is CommonMark
+compliant, supports GitHub Flavoured Markdown extensions (tables, task lists,
+strikethrough), and is only **56 KB**.
 
-### WASM / WASI interface
+It requires a single host import:
 
-| Step | Call | Purpose |
-|------|------|---------|
-| Init | `__wasm_call_ctors()` | WASM module-level constructors |
-| Init | `hs_init_with_rtsopts(&argc, &argv)` | Start GHC Haskell runtime |
-| Convert | write `<wasiDir>/stdin` | Provide Markdown input via WASI FS |
-| Convert | `convert(optsPtr, optsLen)` | Run pandoc with JSON options |
-| Convert | read `<wasiDir>/stdout` | Collect HTML output via WASI FS |
+| Import | Signature | Purpose |
+|--------|-----------|---------|
+| `a.a` | `(i32) → i32` | Emscripten heap-resize callback |
 
-The options JSON `{"from":"markdown","to":"html"}` is allocated in WASM linear
-memory once at startup and reused for all conversions.
+And exposes the following exports used by the service:
 
-### pandoc.wasm is gitignored — automatic download
+| Export | Alias | Purpose |
+|--------|-------|---------|
+| `c` | `__wasm_call_ctors` | C/C++ module-level constructors |
+| `d` | `_wrealloc(ptr, size)` | Heap allocator |
+| `e` | `_wfree(ptr)` | Heap deallocator |
+| `j` | `_parseUTF8(…)` | Markdown → HTML conversion |
 
-`src/main/resources/pandoc.wasm` is excluded from git (≈56 MB).  The Maven
-build downloads it automatically during the `generate-resources` phase using
-`curl` + `tar` from the npm registry:
+### Future upgrade — pandoc.wasm
 
-```bash
-mvn generate-resources   # downloads pandoc.wasm if missing
-```
+The intended target is the official
+[pandoc.wasm](https://github.com/pandoc/pandoc-wasm) binary (≈ 56 MB), which is
+the full [Pandoc](https://pandoc.org) document converter compiled to `wasm32-wasi`
+by the GHC WebAssembly backend.
 
-You can also download it manually:
+**Current blocker:** pandoc.wasm is compiled with the GHC WASM backend which
+generates WASM Exception Handling opcodes (`try`/`catch`/`throw`, opcode `0x06`).
+Chicory 1.7.x does not yet support this proposal.  It is tracked on the
+[Chicory roadmap](https://github.com/dylibso/chicory#roadmap).
 
-```bash
-npm install pandoc-wasm
-cp node_modules/pandoc-wasm/src/pandoc.wasm src/main/resources/pandoc.wasm
-```
+Once Chicory adds exception-handling support, the migration requires only:
 
-## GraalWasm version requirement
+1. Replace `markdown.wasm` with `pandoc.wasm` in `src/main/resources/`.
+2. Update `application.properties`:
+   ```properties
+   quarkus.chicory.modules.markdown.wasm-resource=pandoc.wasm
+   quarkus.chicory.modules.markdown.name=io.jchateau.PandocModule
+   ```
+3. Rewrite `MarkdownService` to use the pandoc WASI interface:
+   ```java
+   // Write markdown to /stdin in the preopened directory
+   Files.writeString(workDir.resolve("stdin"), markdown);
+   // Set up WasiPreview1 with the working directory
+   WasiPreview1 wasi = WasiPreview1.builder()
+       .withOptions(WasiOptions.builder()
+           .withArguments(List.of("pandoc.wasm", "+RTS", "-H64m", "-RTS"))
+           .withDirectory("/", workDir)
+           .build())
+       .build();
+   // Create instance, call __wasm_call_ctors + hs_init_with_rtsopts
+   // Call convert({"from":"markdown","to":"html5"})
+   // Read HTML from /stdout
+   ```
 
-pandoc.wasm is compiled with the GHC WebAssembly backend, which emits the
-[WASM Exception Handling](https://github.com/WebAssembly/exception-handling)
-proposal (section&nbsp;13 "tag" + `try`/`catch`/`throw` opcodes).  This proposal
-is required by the Haskell exception machinery used throughout Pandoc.
-
-| Runtime | Exception Handling | Status |
-|---------|-------------------|--------|
-| Chicory 1.x | ❌ Not supported | Previous implementation |
-| GraalWasm 25.0.x | ❌ Not supported | Current Maven Central release |
-| GraalWasm 25.1.0+ | ✅ Supported | Pending Maven Central release |
-
-Until GraalWasm 25.1.0 is available on Maven Central, the service starts in a
-**degraded mode**: `MarkdownService.isAvailable()` returns `false` and
-conversions return HTTP 503.  Tests are automatically skipped with an
-`assumeTrue` assumption failure.
-
-**To activate full functionality:** update `graalvm.version` in `pom.xml`
-to `25.1.0` (or later) once that version appears on Maven Central.
+The `WasmQuarkusContext` injection, Chicory `Instance` builder, and REST layer
+remain identical for both modules.
 
 ## Project structure
 
 ```
 src/main/java/io/jchateau/
-  MarkdownService.java   – GraalVM Polyglot / pandoc.wasm integration
+  MarkdownService.java   – Chicory / markdown.wasm integration
   MarkdownResource.java  – JAX-RS REST endpoint (POST /api/convert)
 
 src/main/resources/
-  application.properties             – Quarkus config
-  pandoc.wasm                        – Pandoc WASM binary (gitignored; auto-downloaded)
-  META-INF/resources/index.html      – Single-page UI
+  application.properties         – Quarkus + quarkus-chicory config
+  markdown.wasm                  – CommonMark parser (Emscripten/cmark, ~56 KB)
+  META-INF/resources/index.html  – Single-page UI
 
 src/test/java/io/jchateau/
-  MarkdownResourceTest.java  – Integration tests (skipped until GraalWasm 25.1.0)
+  MarkdownResourceTest.java  – Integration tests
 ```
 
 ## Key dependencies
@@ -137,5 +137,5 @@ src/test/java/io/jchateau/
 | Dependency | Version | Purpose |
 |-----------|---------|---------|
 | `io.quarkus:quarkus-rest` | 3.30.6 | JAX-RS REST layer |
-| `org.graalvm.polyglot:polyglot` | 24.2.2 | GraalVM Polyglot API |
-| `org.graalvm.polyglot:wasm-community` | 24.2.2 | GraalWasm WASM engine |
+| `io.quarkiverse.chicory:quarkus-chicory` | 0.0.1 | Quarkus Chicory extension |
+| `com.dylibso.chicory:runtime` | 1.6.1 | WebAssembly Instance / Memory API |
